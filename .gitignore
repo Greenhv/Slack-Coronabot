@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Now build
+.now
+
+# Universal Ctags
+tags

@@ -18,8 +18,8 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # Slack
-app = Flask('Slack Coronabot')
-slack_events_adapter = SlackEventAdapter(SLACK_SIGNING_SECRET, "/slack/events", app)
+app = Flask(__name__)
+slack_events_adapter = SlackEventAdapter(SLACK_SIGNING_SECRET, "/api/bot", app)
 slack_web_client = WebClient(token=ACCESS_TOKEN)
 
 def send_text(channel_id, message):
@@ -67,9 +67,9 @@ def parse_message(message):
 
 def get_photo_url(command, country, days):
     # send the parameters according to the api
-    photo_url = requests.get(DEFAULT_API_ENDPOINT, headers=ENDPOINT_HEADERS)
+    # photo_url = requests.get(DEFAULT_API_ENDPOINT, headers=ENDPOINT_HEADERS)
 
-    return photo_url
+    return "test.com"
 
 def send_plot(channel_id, message):
     try:
@@ -80,7 +80,7 @@ def send_plot(channel_id, message):
         logger.warning(error)
         send_text(channel_id, DEFAULT_ERROR_MSG)
 
-def send_message(payload):
+def process_message(payload):
     event = payload.get("event", {})
     channel_id = event.get("channel")
     message = event.get("text")
@@ -88,15 +88,13 @@ def send_message(payload):
     send_plot(channel_id, message)
 
 def start_listening():
-    slack_events_adapter.on("message", send_message)
-    slack_events_adapter.on("app_mention", send_message)
-
     logger.info("Start listening for Slack events")
 
-    # flask_app.run(port=4000)
+    slack_events_adapter.on("message", process_message)
+    slack_events_adapter.on("app_mention", process_message)
 
 def main():
     start_listening()
 
-if __name__ == '__main__':
+if __name__ == 'api.bot':
     main()

@@ -1,0 +1,7 @@
+{
+  "env": {
+    "SLACK_BOT_ACCESS_TOKEN": "@slack-coronabot-access-token",
+    "SLACK_BOT_SIGNING_SECRET": "@slack-coronabot-signing-secret",
+    "DEFAULT_API_ENDPOINT": "@slack-coronabot-default-api-endpoint"
+  }
+}

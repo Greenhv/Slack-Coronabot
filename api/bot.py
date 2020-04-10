@@ -2,9 +2,10 @@ import os
 import re
 import logging
 import requests
+from urllib.parse import urljoin
 
 # Slack dependencies
-from flask import Flask
+from flask import Flask, Response
 from slack import WebClient
 from slackeventsapi import SlackEventAdapter
 
@@ -18,6 +19,7 @@ ENDPOINT_HEADERS = {'User-Agent': 'CoronaBot'}
 # Messages
 DEFAULT_ERROR_MSG = "Something went wrong, please try again in a bit :pray:"
 FORMAT_ERROR_MSG = "I don't understand that :confounded:, to check the format guidelines please send `/help`"
+API_ERROR_MSG = "Something went wrong while plotting :disappointed:, please try again in a moment"
 WAIT_FOR_ME_MSG = "Got it... Please wait for me :simple_smile:"
 
 # Patterns
@@ -34,7 +36,7 @@ slack_web_client = WebClient(token=ACCESS_TOKEN)
 class FormatException(Exception):
     pass
 
-class RequestException(Exception):
+class APIException(Exception):
     pass
 
 def send_text(channel_id, message):
@@ -74,10 +76,10 @@ def send_photo(channel_id, photo_url):
 
 def get_command(msg):
     arr = msg.split(',')
-    commandArr = arr[0].strip().split(' ')
+    commandArr = arr[0].strip().split('>')
 
     if (len(commandArr) == 1):
-        return commandArr[0]
+        return commandArr[0].strip().lower()
     else:
         return commandArr[1].strip().lower()
 
@@ -98,29 +100,41 @@ def parse_message(message):
     if not message_match:
         raise FormatException('Incorrect pattern')
 
+    days = get_days(message)
+
+    if not days:
+        days = 0
+
     return {
         "command": get_command(message),
         "country": get_country(message),
-        "days": get_days(message)
+        "days": days
     }
 
-def get_photo_url(command, country, days):
-    # send the parameters according to the api
-    # photo_url = requests.get(DEFAULT_API_ENDPOINT, headers=ENDPOINT_HEADERS)
+def get_photo_url(**params):
+    url = urljoin(DEFAULT_API_ENDPOINT, 'plot')
+    response = requests.get(url, params=params)
+    status_code = response.status_code
 
-    return "https://api.slack.com/img/blocks/bkb_template_images/goldengate.png"
+    if status_code == requests.codes['server_error']:
+        raise APIException('The server failed and returned with the code {}'.format(status_code))
+    elif status_code == requests.codes['not_found'] or status_code == requests.codes['unprocessable_entity']:
+        raise FormatException('Incorrect pattern')
+
+    return response.json()['message']
 
 def process_message(channel_id, message):
     try:
         obj_message = parse_message(message)
-
         send_text(channel_id, WAIT_FOR_ME_MSG)
-
         photo_url = get_photo_url(**obj_message)
         send_photo(channel_id, photo_url)
     except FormatException as error:
         logger.warning(error)
         send_text(channel_id, FORMAT_ERROR_MSG)
+    except APIException as error:
+        logger.warning(error)
+        send_text(channel_id, API_ERROR_MSG)
     except Exception as error:
         logger.warning(error)
         send_text(channel_id, DEFAULT_ERROR_MSG)
@@ -134,7 +148,11 @@ def message_handler(payload):
     if bot_id is None:
         process_message(channel_id, message)
 
+    return Response(200)
+
 def start_listening():
+    logger.info('Start listening for slacks events')
+
     slack_events_adapter.on("message", message_handler)
     slack_events_adapter.on("app_mention", message_handler)
 

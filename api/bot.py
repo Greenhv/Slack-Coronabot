@@ -5,7 +5,7 @@ import requests
 from urllib.parse import urljoin
 
 # Slack dependencies
-from flask import Flask, Response
+from flask import Flask, jsonify, request
 from slack import WebClient
 from slackeventsapi import SlackEventAdapter
 
@@ -14,13 +14,12 @@ ACCESS_TOKEN = os.environ['SLACK_BOT_ACCESS_TOKEN']
 SLACK_SIGNING_SECRET = os.environ['SLACK_BOT_SIGNING_SECRET']
 DEFAULT_API_ENDPOINT= os.environ['DEFAULT_API_ENDPOINT']
 
-ENDPOINT_HEADERS = {'User-Agent': 'CoronaBot'}
 
 # Messages
-DEFAULT_ERROR_MSG = "Something went wrong, please try again in a bit :pray:"
-FORMAT_ERROR_MSG = "I don't understand that :confounded:, to check the format guidelines please send `/help`"
+FORMAT_ERROR_MSG = "I don't understand that :confounded:, to check the format guidelines please send `/info`"
 API_ERROR_MSG = "Something went wrong while plotting :disappointed:, please try again in a moment"
 WAIT_FOR_ME_MSG = "Got it... Please wait for me :simple_smile:"
+ADDITIONAL_INFO_MSG = " In case you need help please send `/info`"
 
 # Patterns
 MESSAGE_PATTERN = r'(<@\w*>)?\s*\w*\s*,\s*\w*\s*(,\s*-?\d+)?'
@@ -33,15 +32,32 @@ app = Flask(__name__)
 slack_events_adapter = SlackEventAdapter(SLACK_SIGNING_SECRET, "/api/bot", app)
 slack_web_client = WebClient(token=ACCESS_TOKEN)
 
-class FormatException(Exception):
-    pass
+event_attributes = {}
 
-class APIException(Exception):
-    pass
+class BotException(Exception):
+    status_code = 400
 
-def send_text(channel_id, message):
-    slack_message = {
-        "channel": channel_id,
+    def __init__(self, message, status_code=None, payload=None):
+        Exception.__init__(self)
+        self.message = message
+
+        if status_code is not None:
+            self.status_code = status_code
+
+        self.payload = payload
+
+    def to_dict(self):
+        rv = dict(self.payload or ())
+        rv['message'] = self.message
+
+        return rv
+
+def create_text_msg(message, with_user = False):
+    user_id = event_attributes.get('user') if with_user else None
+ 
+    return {
+        "channel": event_attributes.get('channel'),
+        "user": user_id,
         "text": message,
         "blocks": [
             {
@@ -54,11 +70,17 @@ def send_text(channel_id, message):
         ]
     }
 
+def send_text(message):
+    slack_message = create_text_msg(message)
     slack_web_client.chat_postMessage(**slack_message)
 
-def send_photo(channel_id, photo_url):
+def send_private_text(message):
+    slack_message = create_text_msg(message, True)
+    slack_web_client.chat_postEphemeral(**slack_message)
+
+def send_photo(photo_url):
     slack_message = {
-        "channel": channel_id,
+        "channel": event_attributes.get('channel'),
         "blocks": [
             {
                 "type": "image",
@@ -98,7 +120,7 @@ def parse_message(message):
     message_match = re.search(MESSAGE_PATTERN, message)
 
     if not message_match:
-        raise FormatException('Incorrect pattern')
+        raise BotException('Incorrect pattern', 400, { "chat_message": FORMAT_ERROR_MSG })
 
     days = get_days(message)
 
@@ -114,41 +136,62 @@ def parse_message(message):
 def get_photo_url(**params):
     url = urljoin(DEFAULT_API_ENDPOINT, 'plot')
     response = requests.get(url, params=params)
+    response_obj = response.json()
     status_code = response.status_code
 
     if status_code == requests.codes['server_error']:
-        raise APIException('The server failed and returned with the code {}'.format(status_code))
-    elif status_code == requests.codes['not_found'] or status_code == requests.codes['unprocessable_entity']:
-        raise FormatException('Incorrect pattern')
+        raise BotException('The server failed and returned with the code {}'.format(status_code), 500, { "chat_message": API_ERROR_MSG })
+    elif status_code == requests.codes['not_found']:
+        raise BotException('Incorrect pattern', 400, { "chat_message":  API_ERROR_MSG })
+    elif status_code == requests.codes['unprocessable_entity']:
+        error = response.json().get('errors').get('error')
+        raise BotException(error, 400, { "chat_message":  error + ADDITIONAL_INFO_MSG })
 
-    return response.json()['message']
+    return response_obj.get('message')
 
-def process_message(channel_id, message):
-    try:
-        obj_message = parse_message(message)
-        send_text(channel_id, WAIT_FOR_ME_MSG)
-        photo_url = get_photo_url(**obj_message)
-        send_photo(channel_id, photo_url)
-    except FormatException as error:
-        logger.warning(error)
-        send_text(channel_id, FORMAT_ERROR_MSG)
-    except APIException as error:
-        logger.warning(error)
-        send_text(channel_id, API_ERROR_MSG)
-    except Exception as error:
-        logger.warning(error)
-        send_text(channel_id, DEFAULT_ERROR_MSG)
+@app.errorhandler(BotException)
+def handle_bot_exception(error):
+    error_obj = error.to_dict()
+    chat_message = error_obj.get('chat_message')
+    event_type = event_attributes.get('type')
+    response = jsonify(error_obj)
+    response.status_code = error.status_code
+    response.headers['X-Slack-No-Retry'] = 1
+
+    logger.warning("Status code: {} - ".format(error.status_code) + error_obj.get("message"))
+
+    if chat_message:
+        if event_type == 'message':
+            send_text(error_obj.get("chat_message"))
+        else:
+            send_private_text(error_obj.get("chat_message"))
+
+    return response
+
+def process_message(message):
+    obj_message = parse_message(message)
+    photo_url = get_photo_url(**obj_message)
+
+    send_text(WAIT_FOR_ME_MSG)
+    send_photo(photo_url)
 
 def message_handler(payload):
+    global event_attributes
+
     event = payload.get("event", {})
-    channel_id = event.get("channel")
+    sub_type = event.get("subtype")
+    message_edited = event.get("edited")
     message = event.get("text")
     bot_id = event.get("bot_id")
+    event_attributes = event.copy()
+    retry_header = request.headers.get('X-Slack-Retry-Num')
+    is_not_bot_message = bot_id is None
+    is_not_retry_message = retry_header is None
+    is_not_edited_direct_message = sub_type is None
+    is_not_edited_channel_message = message_edited is None
 
-    if bot_id is None:
-        process_message(channel_id, message)
-
-    return Response(200)
+    if is_not_bot_message and is_not_retry_message and is_not_edited_direct_message and is_not_edited_channel_message:
+        process_message(message)
 
 def start_listening():
     logger.info('Start listening for slacks events')

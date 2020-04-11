@@ -1,2 +1,4 @@
 # Slack-Coronabot
-Implementation to Slack of the Coronabot API
+
+Slack implementation of the [Coronabot API](https://github.com/Inobtenio/CoronaPlotter)
+

@@ -12,7 +12,7 @@ from slackeventsapi import SlackEventAdapter
 # Env constants
 ACCESS_TOKEN = os.environ['SLACK_BOT_ACCESS_TOKEN']
 SLACK_SIGNING_SECRET = os.environ['SLACK_BOT_SIGNING_SECRET']
-DEFAULT_API_ENDPOINT= os.environ['DEFAULT_API_ENDPOINT']
+PLOT_API_ENDPOINT = os.environ['PLOT_API_ENDPOINT']
 
 
 # Messages
@@ -134,7 +134,7 @@ def parse_message(message):
     }
 
 def get_photo_url(**params):
-    url = urljoin(DEFAULT_API_ENDPOINT, 'plot')
+    url = urljoin(PLOT_API_ENDPOINT, 'plot')
     response = requests.get(url, params=params)
     response_obj = response.json()
     status_code = response.status_code
@@ -193,11 +193,3 @@ def message_handler(payload):
     if is_not_bot_message and is_not_retry_message and is_not_edited_direct_message and is_not_edited_channel_message:
         process_message(message)
 
-def start_listening():
-    logger.info('Start listening for slacks events')
-
-    slack_events_adapter.on("message", message_handler)
-    slack_events_adapter.on("app_mention", message_handler)
-
-if __name__ == 'api.bot':
-    start_listening()

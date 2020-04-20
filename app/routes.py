@@ -82,7 +82,8 @@ def callback():
         return redirect_to_app_page()
 
     # todo change logger result to app_id
-    logger.info('Access response obtained {}'.format(access))
+    logger.info('Access response obtained to the workspace {}'.format(
+        access.get('team').get('id')))
 
     team_id = access.get('team').get('id')
     access_token = access.get('access_token')

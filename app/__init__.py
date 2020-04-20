@@ -33,3 +33,4 @@ slack_events_adapter = SlackEventAdapter(
     SLACK_SIGNING_SECRET, "/api/bot", flask_app)
 
 from app import routes, models  # noqa
+from app.commands.event_message import message_handler  # noqa

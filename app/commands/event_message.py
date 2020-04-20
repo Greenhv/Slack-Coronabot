@@ -1,19 +1,17 @@
-import os
+from os import environ
 import re
-import logging
 import requests
 from urllib.parse import urljoin
 
+from app import slack_events_adapter, flask_app, logger
+from ..models import SlackWorkspace
+
 # Slack dependencies
-from flask import Flask, jsonify, request
+from flask import jsonify, request, g
 from slack import WebClient
-from slackeventsapi import SlackEventAdapter
 
 # Env constants
-ACCESS_TOKEN = os.environ['SLACK_BOT_ACCESS_TOKEN']
-SLACK_SIGNING_SECRET = os.environ['SLACK_BOT_SIGNING_SECRET']
-PLOT_API_ENDPOINT = os.environ['PLOT_API_ENDPOINT']
-
+PLOT_API_ENDPOINT = environ['PLOT_API_ENDPOINT']
 
 # Messages
 FORMAT_ERROR_MSG = "I don't understand that :confounded:, to check the format guidelines please send `/info`"
@@ -24,15 +22,16 @@ ADDITIONAL_INFO_MSG = " In case you need help please send `/info`"
 # Patterns
 MESSAGE_PATTERN = r'(<@\w*>)?\s*\w*\s*,\s*\w*\s*(,\s*-?\d+)?'
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Slack
-app = Flask(__name__)
-slack_events_adapter = SlackEventAdapter(SLACK_SIGNING_SECRET, "/api/bot", app)
-slack_web_client = WebClient(token=ACCESS_TOKEN)
-
 event_attributes = {}
+
+
+def get_slack_web_client():
+    team_id = event_attributes.get('team').get('id')
+    workspace = SlackWorkspace.query.filter_by(slack_id=team_id).first()
+    web_client = WebClient(token=workspace.access_token)
+
+    return web_client
+
 
 class BotException(Exception):
     status_code = 400
@@ -52,9 +51,10 @@ class BotException(Exception):
 
         return rv
 
-def create_text_msg(message, with_user = False):
+
+def create_text_msg(message, with_user=False):
     user_id = event_attributes.get('user') if with_user else None
- 
+
     return {
         "channel": event_attributes.get('channel'),
         "user": user_id,
@@ -70,15 +70,21 @@ def create_text_msg(message, with_user = False):
         ]
     }
 
+
 def send_text(message):
+    slack_web_client = get_slack_web_client()
     slack_message = create_text_msg(message)
     slack_web_client.chat_postMessage(**slack_message)
 
+
 def send_private_text(message):
+    slack_web_client = get_slack_web_client()
     slack_message = create_text_msg(message, True)
     slack_web_client.chat_postEphemeral(**slack_message)
 
+
 def send_photo(photo_url):
+    slack_web_client = get_slack_web_client()
     slack_message = {
         "channel": event_attributes.get('channel'),
         "blocks": [
@@ -96,6 +102,7 @@ def send_photo(photo_url):
     }
     slack_web_client.chat_postMessage(**slack_message)
 
+
 def get_command(msg):
     arr = msg.split(',')
     commandArr = arr[0].strip().split('>')
@@ -105,22 +112,26 @@ def get_command(msg):
     else:
         return commandArr[1].strip().lower()
 
+
 def get_country(msg):
     arr = msg.split(',')
 
     return arr[1].strip().lower()
 
+
 def get_days(msg):
     arr = msg.split(',')
-    
+
     if (len(arr) == 3):
         return arr[2].strip()
+
 
 def parse_message(message):
     message_match = re.search(MESSAGE_PATTERN, message)
 
     if not message_match:
-        raise BotException('Incorrect pattern', 400, { "chat_message": FORMAT_ERROR_MSG })
+        raise BotException('Incorrect pattern', 400, {
+                           "chat_message": FORMAT_ERROR_MSG})
 
     days = get_days(message)
 
@@ -133,6 +144,7 @@ def parse_message(message):
         "days": days
     }
 
+
 def get_photo_url(**params):
     url = urljoin(PLOT_API_ENDPOINT, 'plot')
     response = requests.get(url, params=params)
@@ -140,16 +152,20 @@ def get_photo_url(**params):
     status_code = response.status_code
 
     if status_code == requests.codes['server_error']:
-        raise BotException('The server failed and returned with the code {}'.format(status_code), 500, { "chat_message": API_ERROR_MSG })
+        raise BotException('The server failed and returned with the code {}'.format(
+            status_code), 500, {"chat_message": API_ERROR_MSG})
     elif status_code == requests.codes['not_found']:
-        raise BotException('Incorrect pattern', 400, { "chat_message":  API_ERROR_MSG })
+        raise BotException('Incorrect pattern', 400, {
+                           "chat_message":  API_ERROR_MSG})
     elif status_code == requests.codes['unprocessable_entity']:
         error = response.json().get('errors').get('error')
-        raise BotException(error, 400, { "chat_message":  error + ADDITIONAL_INFO_MSG })
+        raise BotException(
+            error, 400, {"chat_message":  error + ADDITIONAL_INFO_MSG})
 
     return response_obj.get('message')
 
-@app.errorhandler(BotException)
+
+@flask_app.errorhandler(BotException)
 def handle_bot_exception(error):
     error_obj = error.to_dict()
     chat_message = error_obj.get('chat_message')
@@ -158,7 +174,8 @@ def handle_bot_exception(error):
     response.status_code = error.status_code
     response.headers['X-Slack-No-Retry'] = 1
 
-    logger.warning("Status code: {} - ".format(error.status_code) + error_obj.get("message"))
+    logger.warning(
+        "Status code: {} - ".format(error.status_code) + error_obj.get("message"))
 
     if chat_message:
         if event_type == 'message':
@@ -168,6 +185,7 @@ def handle_bot_exception(error):
 
     return response
 
+
 def process_message(message):
     obj_message = parse_message(message)
     photo_url = get_photo_url(**obj_message)
@@ -175,6 +193,9 @@ def process_message(message):
     send_text(WAIT_FOR_ME_MSG)
     send_photo(photo_url)
 
+
+@slack_events_adapter.on('app_mention')
+@slack_events_adapter.on('message')
 def message_handler(payload):
     global event_attributes
 
@@ -183,8 +204,14 @@ def message_handler(payload):
     message_edited = event.get("edited")
     message = event.get("text")
     bot_id = event.get("bot_id")
-    event_attributes = event.copy()
     retry_header = request.headers.get('X-Slack-Retry-Num')
+
+    logger.info(request.json)
+
+    event_attributes = event.copy()
+
+    logger.info(event_attributes)
+
     is_not_bot_message = bot_id is None
     is_not_retry_message = retry_header is None
     is_not_edited_direct_message = sub_type is None
@@ -192,4 +219,3 @@ def message_handler(payload):
 
     if is_not_bot_message and is_not_retry_message and is_not_edited_direct_message and is_not_edited_channel_message:
         process_message(message)
-

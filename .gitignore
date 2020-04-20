@@ -134,3 +134,6 @@ dmypy.json
 
 # Universal Ctags
 tags
+
+# SqlLite
+app.db

@@ -1,5 +1,6 @@
 from inspect import cleandoc
 
+
 def get_help():
     text = """Hi, I'm the CoronaBot. You can ask for current info about the novel coronavirus in your area.
 
@@ -26,4 +27,3 @@ def get_help():
             Safe plotting :wink:"""
 
     return cleandoc(text)
-

@@ -1,7 +1,7 @@
 requests==2.23.0
 slackclient==2.5.0
 slackeventsapi==2.1.0
-flask==1.1.1
+flask==2.3.2
 flask-sqlalchemy==2.4.1
 autopep8==1.5.1
 sqlalchemy_utils==0.36.3
